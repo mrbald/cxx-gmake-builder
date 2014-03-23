@@ -19,6 +19,7 @@ $(info FILE_DIR=$(FILE_DIR))
 $(info BASE_DIR=$(BASE_DIR))
 $(info WORK_DIR=$(WORK_DIR))
 
+# TODO: VL: checked inter-plugin dependencies, load plugins the same way the targets are loadeded
 $(info loading plugins from $(ROOT_DIR)/plugins...)
 -include $(ROOT_DIR)/plugins/*.mk
 
@@ -27,7 +28,6 @@ ifneq ($(ROOT_DIR),$(FILE_DIR)/build)
   -include $(FILE_DIR)/build/plugins/*.mk
 endif
 
-KNOWN_TARGET_TYPES := PHONY
 REGISTERED_TARGETS :=
 
 BUILDERS_PHONY_ARGS = MESSAGE
@@ -38,13 +38,14 @@ $(1):
 endef
 
 define add_subtarget
-  $(info compiling $(1))
-  $$(info processing $(1))
+  $(info compiling $(1)) # logged when doing $(call ...)
+  $$(info processing $(1)) # logged when doing $(eval $(call ...))
 
   TARGET_TYPE := PHONY
-  TARGET_NAME := $(notdir $(abspath $(dir $(abspath $(1)))))
+  TARGET_BASE_DIR := $(abspath $(dir $(abspath $(1))))
+  TARGET_REL_BASE_DIR := $$(TARGET_BASE_DIR:$(BASE_DIR)/%=%)
+  TARGET_NAME := $$(subst /,_,$$(TARGET_REL_BASE_DIR))
   TARGET_MESSAGE := phony target $$(TARGET_NAME), nothing done
-  #TARGET_SOURCES := $$(abspath $$(wildcard $(dir $(abspath $(1)))/*.cc))
   TARGET_DEPENDS :=
 
   include $(abspath $(1))
@@ -56,12 +57,8 @@ define add_subtarget
   $$(if $$(strip $$(TARGET_TYPE)),,$$(error empty target type: [$$(TARGET_TYPE)]))
 
   $$(if $$(filter undefined,$$(origin BUILDERS_$$(TARGET_TYPE)_CODE)),$$(error unknown target type: [$$(TARGET_TYPE)]))
-  #ifndef BUILDERS_$$(TARGET_TYPE)_CODE
-  #  $$(error unknown target type: [$$(TARGET_TYPE)])
-  #endif
-  BUILDER_CODE := $$(BUILDERS_$$(TARGET_TYPE)_CODE)
 
-  #$$(if $$(strip $$(filter $$(TARGET_TYPE),$$(KNOWN_TARGET_TYPES))),,$$(error unknown target type: [$$(TARGET_TYPE)]))
+  BUILDER_CODE := $$(BUILDERS_$$(TARGET_TYPE)_CODE)
 
   $$(info registered: type:[$$(TARGET_TYPE)], name:[$$(TARGET_NAME)], depends on:[$$(TARGET_DEPENDS)])
 
@@ -83,23 +80,17 @@ define add_subtarget
         $$(eval TARGETS_$$(TARGET_NAME)_$$(name) = $$(TARGET_$$(name)))\
     )
 
-    # deferred assignment '=' below is on purpose
-    #TARGETS_$$(TARGET_NAME)_ARGS := $$(BUILDERS_$$(TARGET_TYPE)_ARGS)
   endif
-  # deferred assignment '=' below is on purpose
-  #TARGETS_$$(TARGET_NAME)_CODE := $$(call $$(BUILDERS_$$(TARGET_TYPE)_CODE),$$(TARGET_NAME))
 
-  #$$(info $$(call BUILDERS_$$(TARGET_TYPE)_CODE,$$(TARGET_NAME)))
   $$(eval $$(call BUILDERS_$$(TARGET_TYPE)_CODE,$$(TARGET_NAME)))
 
-  #$$(info TARGET_DEPENDS:$$(TARGET_DEPENDS))
   $$(if $$(TARGET_DEPENDS),$$(eval $$(TARGET_NAME): $$(TARGET_DEPENDS:,= )))
   $$(if $$(TARGET_DEPENDS),$$(info $$(TARGET_NAME): $$(TARGET_DEPENDS:,= )))
 
   REGISTERED_TARGETS += $$(TARGET_NAME)
 
-  $$(info processed $(1))
-  $(info compiled $(1))
+  $$(info processed $(1)) # logged when doing $(eval $(call ...))
+  $(info compiled $(1)) # logged when doing $(call ...)
 endef
 
 # invocation of the above defined function on recursively found rules.mk files
@@ -107,18 +98,11 @@ $(foreach sub,$(shell find $(BASE_DIR) -mindepth 2 -type f -name rules.mk -print
     $(eval $(call add_subtarget,$(sub)))\
 )
 
-#$(eval $(call subtarged,config/rules.mk))
 $(info REGISTERED_TARGETS=$(REGISTERED_TARGETS))
 
 $(info ### BUILD SYSTEM BOOTSTRAP LOG END ###)
 $(info )
 $(info ### BUILD LOG BEGIN ###)
-
-## instantiate rules
-#$(foreach name,$(REGISTERED_TARGETS),\
-#    $(info $(name) -- $(TARGETS_$(name)_CODE))\
-#    $(eval $(TARGETS_$(name)_CODE))\
-#)
 
 .PHONY: all
 all:
