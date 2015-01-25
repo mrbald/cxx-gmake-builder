@@ -14,14 +14,18 @@ BASE_DIR ?= $(abspath $(FILE_DIR)/src)
 # project build working area (obj, lib, bin, etc.)
 WORK_DIR ?= $(PWD)
 
+# plugins directory (*.mk with arbitrary contents to be included in the build)
+PLUGIN_DIR ?= $(ROOT_DIR)/plugins
+
 $(info ROOT_DIR=$(ROOT_DIR))
 $(info FILE_DIR=$(FILE_DIR))
 $(info BASE_DIR=$(BASE_DIR))
 $(info WORK_DIR=$(WORK_DIR))
+$(info PLUGIN_DIR=$(PLUGIN_DIR))
 
 # TODO: VL: checked inter-plugin dependencies, load plugins the same way the targets are loadeded
 $(info loading plugins from $(ROOT_DIR)/plugins...)
--include $(ROOT_DIR)/plugins/*.mk
+-include $(PLUGIN_DIR)/*.mk
 
 ifneq ($(ROOT_DIR),$(FILE_DIR)/build)
   $(info including project custom plugins from $(FILE_DIR)/build/plugins...)
@@ -81,11 +85,25 @@ define add_subtarget
     )
 
   endif
+  
+  # Do the same for the optional arguments
+  # Write all required variables from TARGET_VARNAME to TARGETS_<TARGET_NAME>_VARNAME
+  ifdef BUILDERS_$$(TARGET_TYPE)_OPTIONAL_ARGS
+    BUILDER_ARGS := $$(BUILDERS_$$(TARGET_TYPE)_OPTIONAL_ARGS)
 
-  $$(eval $$(call BUILDERS_$$(TARGET_TYPE)_CODE,$$(TARGET_NAME)))
+    # save target variables required by the requested builder in unique variables
+    $$(foreach name,$$(BUILDER_ARGS),\
+        $$(if $$(filter-out undefined,$$(origin TARGET_$$(name))),\
+            $$(eval TARGETS_$$(TARGET_NAME)_$$(name) = $$(TARGET_$$(name)))\
+        )\
+    )
 
-  $$(if $$(TARGET_DEPENDS),$$(eval $$(TARGET_NAME): $$(TARGET_DEPENDS:,= )))
-  $$(if $$(TARGET_DEPENDS),$$(info $$(TARGET_NAME): $$(TARGET_DEPENDS:,= )))
+  endif
+
+  TARGETS_$$(TARGET_NAME)_BASE_DIR:=$$(TARGET_BASE_DIR)
+  TARGETS_$$(TARGET_NAME)_REL_BASE_DIR:=$$(TARGET_REL_BASE_DIR)
+  TARGETS_$$(TARGET_NAME)_TYPE:=$$(TARGET_TYPE)
+  $$(if $$(TARGET_DEPENDS),$$(eval TARGETS_$$(TARGET_NAME)_DEPENDS:=$$(TARGET_DEPENDS)))
 
   REGISTERED_TARGETS += $$(TARGET_NAME)
 
@@ -98,7 +116,35 @@ $(foreach sub,$(shell find $(BASE_DIR) -mindepth 2 -type f -name rules.mk -print
     $(eval $(call add_subtarget,$(sub)))\
 )
 
+# sort targets topologically
+REGISTERED_TARGETS_TOPOLOGICAL:=
+REGISTERED_TARGETS_ALPHABETICAL:=$(sort $(REGISTERED_TARGETS))
+
+define do_topological_sort
+  REGISTERED_TARGETS_TOPOLOGICAL+=$$(foreach name,$$(REGISTERED_TARGETS_ALPHABETICAL),$$(if $$(filter-out $$(REGISTERED_TARGETS_TOPOLOGICAL),$$(TARGETS_$$(name)_DEPENDS)),,$$(name)))
+  REGISTERED_TARGETS_ALPHABETICAL:=$$(filter-out $$(REGISTERED_TARGETS_TOPOLOGICAL),$$(REGISTERED_TARGETS_ALPHABETICAL))
+  $$(if $(REGISTERED_TARGETS_ALPHABETICAL),$$(eval $$(call do_topological_sort)))
+endef
+
+$(eval $(call do_topological_sort))
+REGISTERED_TARGETS_TOPOLOGICAL:=$(strip $(REGISTERED_TARGETS_TOPOLOGICAL))
+
 $(info REGISTERED_TARGETS=$(REGISTERED_TARGETS))
+$(info REGISTERED_TARGETS_TOPOLOGICAL=$(REGISTERED_TARGETS_TOPOLOGICAL))
+
+$(info === BEGIN: dependencies graph (in the topological order) ===)
+$(foreach name,$(REGISTERED_TARGETS_TOPOLOGICAL),\
+  $(info $(name): $(TARGETS_$(name)_DEPENDS))\
+)
+$(info === END: dependencies graph (in the topological order) ===)
+
+# run builder generation code in the topological order
+$(foreach name,$(REGISTERED_TARGETS_TOPOLOGICAL),\
+  $(info generating builder for [$(name)]...)\
+  $(eval $(call BUILDERS_$(TARGETS_$(name)_TYPE)_CODE,$(name)))\
+  $(eval all: | $(name))\
+  $(info generated builder for [$(name)])\
+)
 
 $(info ### BUILD SYSTEM BOOTSTRAP LOG END ###)
 $(info )
