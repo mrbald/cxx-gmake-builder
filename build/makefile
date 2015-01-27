@@ -116,7 +116,17 @@ $(foreach sub,$(shell find $(BASE_DIR) -mindepth 2 -type f -name rules.mk -print
     $(eval $(call add_subtarget,$(sub)))\
 )
 
+# validate no missing targets in dependencies (else topological sort loops forever)
+# triggers an error when TARGET_DEPENDENDS in the rules.mk refers to a non-existing target
+$(info checking for unresolved target dependencies...)
+$(foreach tgt,$(REGISTERED_TARGETS),\
+    $(if $(filter-out $(REGISTERED_TARGETS),$(TARGETS_$(tgt)_DEPENDS)),\
+        $(error unknown targets [$(filter-out $(REGISTERED_TARGETS),$(TARGETS_$(tgt)_DEPENDS))] in dependency list of the target [$(tgt)])\
+    )\
+)
+
 # sort targets topologically
+$(info sorting targets topologically...)
 REGISTERED_TARGETS_TOPOLOGICAL:=
 REGISTERED_TARGETS_ALPHABETICAL:=$(sort $(REGISTERED_TARGETS))
 
@@ -153,6 +163,10 @@ $(info ### BUILD LOG BEGIN ###)
 .PHONY: all
 all:
 	@echo "making all targets..."
+
+.PHONY: nothing
+nothing:
+	@echo "OK"
 
 .PHONY: clean
 clean:
