@@ -85,7 +85,7 @@ define add_subtarget
     )
 
   endif
-  
+
   # Do the same for the optional arguments
   # Write all required variables from TARGET_VARNAME to TARGETS_<TARGET_NAME>_VARNAME
   ifdef BUILDERS_$$(TARGET_TYPE)_OPTIONAL_ARGS
@@ -111,7 +111,8 @@ define add_subtarget
   $(info compiled $(1)) # logged when doing $(call ...)
 endef
 
-# invocation of the above defined function on recursively found rules.mk files
+
+# invoke the above defined function on recursively found rules.mk files
 $(foreach sub,$(shell find $(BASE_DIR) -mindepth 2 -type f -name rules.mk -print),\
     $(eval $(call add_subtarget,$(sub)))\
 )
@@ -125,28 +126,81 @@ $(foreach tgt,$(REGISTERED_TARGETS),\
     )\
 )
 
-# sort targets topologically
-$(info sorting targets topologically...)
-REGISTERED_TARGETS_TOPOLOGICAL:=
-REGISTERED_TARGETS_ALPHABETICAL:=$(sort $(REGISTERED_TARGETS))
+# validate no circular dependencies and sort targets in topological order
+# algirhm from  http://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm
+# math operators idea from http://www.cmcrossroads.com/article/learning-gnu-make-functions-arithmetic
+min=$(subst xx,x,$(filter xx,$(join $(1),$(2))))
+increment=$(1) x
+eq=$(filter $(words $(1)),$(words $(2)))
 
-define do_topological_sort
-  REGISTERED_TARGETS_TOPOLOGICAL+=$$(foreach name,$$(REGISTERED_TARGETS_ALPHABETICAL),$$(if $$(filter-out $$(REGISTERED_TARGETS_TOPOLOGICAL),$$(TARGETS_$$(name)_DEPENDS)),,$$(name)))
-  REGISTERED_TARGETS_ALPHABETICAL:=$$(filter-out $$(REGISTERED_TARGETS_TOPOLOGICAL),$$(REGISTERED_TARGETS_ALPHABETICAL))
-  $$(if $(REGISTERED_TARGETS_ALPHABETICAL),$$(eval $$(call do_topological_sort)))
+undef = $(filter undefined,$(flavor $(1)))
+
+scc_index:=x
+scc_S:=
+scc_V:=$(REGISTERED_TARGETS)
+
+# $(1) - node to unwind back from
+define scc_pop_group
+  scc_z:=$$(lastword $$(scc_S))
+  scc_S:=$$(filter-out $$(scc_z),$$(scc_S))
+  scc_SCC+=$$(scc_z)
+  ifneq ($$(scc_z),$(1))
+    $$(eval $$(call scc_pop_group,$(1)))
+  endif
 endef
 
-$(eval $(call do_topological_sort))
+define scc_scan_down
+  scc_$(1)_index:=$$(scc_index)
+  scc_$(1)_lowlink:=$$(scc_index)
+  scc_index:=$$(call increment,$$(scc_index))
+
+  scc_S+=$(1)
+
+  $$(foreach scc_w,$$(TARGETS_$(1)_DEPENDS),\
+    $$(if $$(call undef,scc_$$(scc_w)_index),\
+      $$(eval $$(call scc_scan_down,$$(scc_w)))\
+      $$(eval scc_$(1)_lowlink:=$$(call min,$$(scc_$(1)_lowlink),$$(scc_$$(scc_w)_lowlink)))\
+    ,\
+      $$(if $$(filter $$(scc_S),$$(scc_w)),\
+        $$(eval scc_$(1)_lowlink:=$$(call min,$$(scc_$(1)_lowlink),$$(scc_$$(scc_w)_index)))\
+      )\
+    )\
+  )
+
+  $$(if $$(call eq,$$(scc_$(1)_lowlink),$$(scc_$(1)_index)),\
+    $$(eval scc_SCC:=)\
+    $$(eval $$(call scc_pop_group,$(1)))\
+    $$(if $$(filter $$(words $$(scc_SCC)),1),\
+      $$(eval REGISTERED_TARGETS_TOPOLOGICAL+=$$(scc_SCC))\
+    ,\
+      $$(warning circular dependency [$$(strip $$(scc_SCC))])\
+      $$(eval HAVE_CIRCULAR_DEPENDENCIES:=yes)\
+    )\
+  )
+
+  # restore the value to what it was before the function call
+  # make does not have function local variables
+  scc_w:=$(1)
+endef
+
+REGISTERED_TARGETS_TOPOLOGICAL:=
+HAVE_CIRCULAR_DEPENDENCIES:=
+$(info checking for circular dependencies and ordering targets...)
+$(foreach scc_v,$(scc_V),\
+    $(if $(call undef,scc_$(scc_v)_index),$(eval $(call scc_scan_down,$(scc_v))))\
+)
 REGISTERED_TARGETS_TOPOLOGICAL:=$(strip $(REGISTERED_TARGETS_TOPOLOGICAL))
 
-$(info REGISTERED_TARGETS=$(REGISTERED_TARGETS))
-$(info REGISTERED_TARGETS_TOPOLOGICAL=$(REGISTERED_TARGETS_TOPOLOGICAL))
+$(if $(HAVE_CIRCULAR_DEPENDENCIES),\
+  $(error cannot proceed until circular dependencies are resolved),\
+  $(info circular dependencies check clean))
 
 $(info === BEGIN: dependencies graph (in the topological order) ===)
 $(foreach name,$(REGISTERED_TARGETS_TOPOLOGICAL),\
   $(info $(name): $(TARGETS_$(name)_DEPENDS))\
 )
 $(info === END: dependencies graph (in the topological order) ===)
+
 
 # run builder generation code in the topological order
 $(foreach name,$(REGISTERED_TARGETS_TOPOLOGICAL),\
