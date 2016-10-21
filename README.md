@@ -1,4 +1,4 @@
-cxxblocks
+C++ GNU Make Builder
 =========
 
-Generic and not software building blocks in C++ biased towards GNU Linux platform
+Experimental build system written in GNU Make capable of building hierarchical project without recursion. An example of functional programming with macros in GNU Make.
